@@ -63,7 +63,7 @@ add_definitions(-DWIIUSE_COMPILE_LIB)
 add_library(wiiuse ${SOURCES} ${API})
 
 if(WIN32)
-	target_link_libraries(wiiuse ws2_32 setupapi ${WINHID_LIBRARIES})
+	target_link_libraries(wiiuse ws2_32 setupapi bthprops ${WINHID_LIBRARIES})
 elseif(WITH_BT_EMBEDDED)
 	if(CMAKE_SYSTEM_NAME MATCHES "NintendoWii")
 		set(EXTRA_LIBS ogc)

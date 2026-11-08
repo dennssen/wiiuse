@@ -39,11 +39,150 @@
 
 #ifdef WIIUSE_WIN32
 #include <stdlib.h>
+#include "bluetoothapis.h"
 
 #define WIN32_LEAN_AND_MEAN
 #define _WIN32_WINNT 0x0A00
 #include <hidsdi.h>
 #include <setupapi.h>
+
+bool wchar_starts_with(const wchar_t *str, const wchar_t *prefix) {
+    if (!str || !prefix) {
+        return false;
+    }
+
+    return wcsncmp(str, prefix, wcslen(prefix)) == 0;
+}
+
+bool is_wiimote_name(WCHAR *name) {
+    return wchar_starts_with(name, L"Nintendo RVL-CNT");
+}
+
+bool should_remove_wiimote(BLUETOOTH_DEVICE_INFO* btdi) {
+    return btdi->fRemembered && ! btdi->fConnected && !btdi->fAuthenticated;
+}
+
+bool try_remove_wiimote(HANDLE radio_handle, const BLUETOOTH_RADIO_INFO* radio_info, BLUETOOTH_DEVICE_INFO* btdi) {
+    if (!should_remove_wiimote(btdi)) {
+        return true;
+    }
+
+    printf("Removing Wiimote\n");
+
+    const auto remove_device_result = BluetoothRemoveDevice(&btdi->Address);
+    if (remove_device_result != ERROR_SUCCESS) {
+        printf("BluetoothRemoveDevice failed: %lu\n", remove_device_result);
+        return true;
+    }
+
+    return true;
+}
+
+bool try_pair_wiimote(HANDLE radio_handle, const BLUETOOTH_RADIO_INFO* radio_info, BLUETOOTH_DEVICE_INFO* btdi) {
+    if (btdi->fConnected)
+        return true;
+
+    const auto name = btdi->szName;
+
+    const auto service_state_result = BluetoothSetServiceState(
+        radio_handle,
+        btdi,
+        &HumanInterfaceDeviceServiceClass_UUID,
+        BLUETOOTH_SERVICE_ENABLE
+    );
+    if (service_state_result != ERROR_SUCCESS) {
+        printf("BluetoothSetServiceState failed: %lu\n", service_state_result);
+        return true;
+    }
+
+    return true;
+}
+
+bool is_wiimote(HANDLE radio_handle, const BLUETOOTH_RADIO_INFO* radio_info, BLUETOOTH_DEVICE_INFO* btdi) {
+    const auto name = btdi->szName;
+
+    return is_wiimote_name(name);
+}
+
+bool search_devices(HANDLE radio_handle, BLUETOOTH_DEVICE_SEARCH_PARAMS search_params, bool (*callback)(HANDLE, const BLUETOOTH_RADIO_INFO*, BLUETOOTH_DEVICE_INFO*)) {
+    BLUETOOTH_RADIO_INFO radio_info = {};
+    radio_info.dwSize = sizeof(radio_info);
+
+    if (BluetoothGetRadioInfo(radio_handle, &radio_info) != ERROR_SUCCESS) {
+        return true;
+    }
+
+    search_params.hRadio = radio_handle;
+
+    BLUETOOTH_DEVICE_INFO btdi = {};
+    btdi.dwSize = sizeof(btdi);
+
+    const auto find_device = BluetoothFindFirstDevice(&search_params, &btdi);
+    if (find_device == nullptr) {
+        return true;
+    }
+
+    while (true) {
+        if (!is_wiimote(radio_handle, &radio_info, &btdi))
+            break;
+
+        if (!callback(radio_handle, &radio_info, &btdi))
+            break;
+
+        if (!BluetoothFindNextDevice(find_device, &btdi))
+            break;
+    }
+
+    BluetoothFindDeviceClose(find_device);
+    return true;
+}
+
+void search_radios(BLUETOOTH_DEVICE_SEARCH_PARAMS search_params, bool (*callback)(HANDLE, const BLUETOOTH_RADIO_INFO*, BLUETOOTH_DEVICE_INFO*)) {
+    BLUETOOTH_FIND_RADIO_PARAMS radio_params = {};
+    radio_params.dwSize = sizeof(radio_params);
+
+    HANDLE radio_handle = {};
+    const auto find_radio = BluetoothFindFirstRadio(&radio_params, &radio_handle);
+    if (find_radio == nullptr) {
+        printf("Failed to find radio\n");
+        return;
+    }
+
+    while (true) {
+        const auto control = search_devices(radio_handle, search_params, callback);
+        CloseHandle(radio_handle);
+
+        if (!control)
+            break;
+
+        if (!BluetoothFindNextRadio(find_radio, &radio_handle))
+            break;
+    }
+
+    BluetoothFindRadioClose(find_radio);
+}
+
+void enumerate_bluetooth_wiimotes(uint8_t inquiry_length, bool (*callback)(HANDLE, const BLUETOOTH_RADIO_INFO*, BLUETOOTH_DEVICE_INFO*)) {
+    BLUETOOTH_DEVICE_SEARCH_PARAMS search_params = {
+        .fReturnAuthenticated = true,
+        .fReturnRemembered = true,
+        .fReturnUnknown = true,
+        .fReturnConnected = true,
+        .fIssueInquiry = inquiry_length > 0,
+        .cTimeoutMultiplier = inquiry_length
+    };
+    search_params.dwSize = sizeof(search_params);
+
+    search_radios(search_params, callback);
+}
+
+void discover_and_pair_wiimotes(uint8_t inquiry_length) {
+    enumerate_bluetooth_wiimotes(inquiry_length, try_pair_wiimote);
+}
+
+void remove_remembered_wiimotes() {
+    enumerate_bluetooth_wiimotes(0, try_remove_wiimote);
+}
 
 unsigned long wiiuse_os_ticks()
 {
@@ -78,6 +217,9 @@ int wiiuse_os_find(struct wiimote_t **wm, int max_wiimotes, int timeout)
 
     device_data.cbSize = sizeof(device_data);
     index              = 0;
+
+    remove_remembered_wiimotes();
+    discover_and_pair_wiimotes(3);
 
     /* get the device id */
     HidD_GetHidGuid(&device_id);
