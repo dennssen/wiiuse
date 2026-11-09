@@ -2,6 +2,18 @@
 # http://academic.cleardefinition.com/
 # Iowa State University HCI Graduate Program/VRAC
 
+#
+# Copyright (C) 2026 dennssen
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Modified by dennssen on 08/11/2026
+# Changes: added linking of bthprops to wiiuse for use in src/os_win.c
+#
+
 cmake_minimum_required(VERSION 3.10.0)
 
 # Set package properties
